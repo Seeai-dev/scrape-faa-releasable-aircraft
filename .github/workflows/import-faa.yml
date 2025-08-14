@@ -73,7 +73,7 @@ jobs:
             staging.faa_aircraft_master;
           SQL
           
-          # load "$RAW/ACFTREF.txt"  "staging.faa_aircraft_references" "$ACFTREF_COLS"
+          load "$RAW/ACFTREF.txt"  "staging.faa_aircraft_references" "$ACFTREF_COLS"
           load "$RAW/ENGINE.txt"   "staging.faa_engine_references"   "$ENGINE_COLS"
           load "$RAW/DEALER.txt"   "staging.faa_dealers"             "$DEALER_COLS"
           load "$RAW/DOCINDEX.txt" "staging.faa_document_index"      "$DOCINDEX_COLS"
