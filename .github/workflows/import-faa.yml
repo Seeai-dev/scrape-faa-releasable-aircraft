@@ -14,7 +14,7 @@ jobs:
 
       - name: Load FAA Data into Neon
         env:
-          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          DATABASE_URL: "postgresql://neondb_owner:npg_yUazAEhdt30r@ep-empty-hill-adm7gymq-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
           RAW: https://raw.githubusercontent.com/simonw/scrape-faa-releasable-aircraft/main
         run: |
           set -euo pipefail
