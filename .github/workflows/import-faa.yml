@@ -35,6 +35,7 @@ jobs:
             cols="$3"   # comma-separated column list in FAA order
             curl -fsSL "$url" \
               | iconv -f WINDOWS-1252 -t UTF-8 \
+              | sed -E 's/\r$//; s/,+$//' \        # remove CR and any trailing commas
               | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
                   -c "\copy ${table} (${cols}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
           }
