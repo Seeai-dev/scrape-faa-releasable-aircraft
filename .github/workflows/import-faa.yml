@@ -35,9 +35,8 @@ jobs:
             cols="$3"   # comma-separated column list in FAA order
             curl -fsSL "$url" \
               | iconv -f WINDOWS-1252 -t UTF-8 \
-              | sed -E 's/\r$//; s/,+$//' \        # remove CR and any trailing commas
-              | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-                  -c "\copy ${table} (${cols}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
+              | sed -E 's/\r$//; s/,+$//' | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+              -c "\copy ${table} (${cols}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
           }
           
           # ---- Column lists (FAA file order) ----
@@ -87,8 +86,4 @@ jobs:
                 load "$RAW/$f" "staging.faa_aircraft_master" "$MASTER_COLS"
               done
 
-          # 3) Load multi-part MASTER files (MASTER-1.txt ... MASTER-N.txt) without knowing N
-          curl -fsSL https://api.github.com/repos/simonw/scrape-faa-releasable-aircraft/contents/ \
-            | grep -o 'MASTER-[0-9]\+\.txt' | sort -V | uniq | while read f; do
-              load "$RAW/$f" "staging.faa_aircraft_master"
-            done
+  
