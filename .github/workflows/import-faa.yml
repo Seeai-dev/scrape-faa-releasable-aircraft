@@ -1,9 +1,9 @@
 name: Import FAA into Neon
 
 on:
-  # schedule:
-  #   - cron: "15 6 * * *"   # 06:15 UTC daily; adjust as you like
   workflow_dispatch: {}
+  # schedule:
+  #   - cron: "15 6 * * *"   # Uncomment to run daily at 06:15 UTC
 
 jobs:
   load:
@@ -12,56 +12,44 @@ jobs:
       - name: Install psql and iconv
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Load ACFTREF / ENGINE / DEALER / DOCINDEX / RESERVED / DEREG / MASTER-*.txt
+      - name: Load FAA Data into Neon
         env:
-          # DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}  # e.g. postgres://user:pass@ep-...neon.tech/neondb
-          DATABASE_URL: "postgresql://neondb_owner:npg_yUazAEhdt30r@ep-empty-hill-adm7gymq-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           RAW: https://raw.githubusercontent.com/simonw/scrape-faa-releasable-aircraft/main
         run: |
           set -euo pipefail
-          export PGPASSWORD=$(python3 - <<'PY'
-          import re,sys,os
-          # If your DATABASE_URL has a password, psql will use it; otherwise skip.
-          print("")
-          PY
-          )
+
+          # Ensure no statement timeout for bulk load
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SET statement_timeout = 0;"
 
-          # Helper: stream a remote CSV into a staging table
-          # Helper: stream a remote CSV into a staging table (explicit column list!)
+          # Helper: stream + sanitize + load with explicit columns
           load () {
-            url="$1"    # CSV URL
-            table="$2"  # staging table
-            cols="$3"   # comma-separated column list in FAA order
+            url="$1"
+            table="$2"
+            cols="$3"
             curl -fsSL "$url" \
               | iconv -f WINDOWS-1252 -t UTF-8 \
-              | sed -E 's/\r$//; s/,+$//' | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-              -c "\copy ${table} (${cols}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
+              | sed -E 's/\r$//; s/,+$//' \
+              | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+                  -c "\copy ${table} (${cols}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
           }
-          
-          # ---- Column lists (FAA file order) ----
-          # ACFTREF.txt
+
+          # ---- FAA column lists (raw file order) ----
           ACFTREF_COLS="code,aircraft_mfr_name,model_name,type_aircraft,type_engine,aircraft_category_code,builder_certification_code,number_of_engines,number_of_seats,aircraft_weight,aircraft_cruising_speed,tc_data_sheet,tc_data_holder"
-          
-          # ENGINE.txt
+
           ENGINE_COLS="code,engine_mfr_name,engine_model_name,type_engine,engine_horsepower,pounds_of_thrust"
-          
-          # DEALER.txt
-          DEALER_COLS="certificate_number,dealer_name,ownership_type,street1_address,street2_address,city,state,zip_code,country,region,county,certificate_issue_date,expiration_date,expiration_flag,cumulative_issue_count,other_names_count,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5"
-          
-          # DOCINDEX.txt  (staging must NOT have a synthetic 'id' column; see step 2)
+
+          DEALER_COLS="certificate_number,ownership_type,certificate_issue_date,expiration_date,expiration_flag,cumulative_issue_count,dealer_name,street1_address,street2_address,city,state,zip_code,country,region,county,other_names_count,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5"
+
           DOCINDEX_COLS="document_id,type_collateral,collateral,name_of_party,document_receipt_date,processing_date,correction_date,correction_identification,serial_id,doc_type"
-          
-          # RESERVED.txt
+
           RESERVED_COLS="n_number,registrant_name,street_address,street2,city,state,zip_code,reserve_date,type_reservation,expiration_notice_date,n_number_for_change,purge_date"
-          
-          # DEREG.txt
+
           DEREG_COLS="n_number,serial_number,aircraft_mfr_mdl_code,eng_mfr_mdl_code,year_mfr,type_registrant,registrant_name,street,street2,city,state,zip_code,region,county,country,status_code,type_aircraft,type_engine,certification,last_action_date,cert_issue_date,air_worth_date,cancel_date,expiration_date,mode_s_code,mode_s_code_hex,fract_owner,unique_id,kit_mfr,kit_model,export_country,physical_address,physical_address_2,physical_city,physical_state,physical_zip_code,physical_county,physical_country,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5,reason_code"
-          
-          # MASTER-*.txt
+
           MASTER_COLS="n_number,serial_number,aircraft_mfr_mdl_code,eng_mfr_mdl_code,year_mfr,type_registrant,registrant_name,street,street2,city,state,zip_code,region,county,country,status_code,mode_s_code,fract_owner,type_aircraft,type_engine,certification,last_action_date,cert_issue_date,air_worth_date,expiration_date,unique_id,kit_mfr,kit_model,mode_s_code_hex,export_country,physical_address,physical_address_2,physical_city,physical_state,physical_zip_code,physical_county,physical_country,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5"
-          
-          # ---- Truncate, then load with explicit columns ----
+
+          # ---- Truncate staging ----
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           TRUNCATE TABLE
             staging.faa_aircraft_references,
@@ -72,18 +60,17 @@ jobs:
             staging.faa_deregistered_aircraft,
             staging.faa_aircraft_master;
           SQL
-          
-          load "$RAW/ACFTREF.txt"  "staging.faa_aircraft_references" "$ACFTREF_COLS"
-          load "$RAW/ENGINE.txt"   "staging.faa_engine_references"   "$ENGINE_COLS"
-          load "$RAW/DEALER.txt"   "staging.faa_dealers"             "$DEALER_COLS"
-          load "$RAW/DOCINDEX.txt" "staging.faa_document_index"      "$DOCINDEX_COLS"
-          load "$RAW/RESERVED.txt" "staging.faa_reserved_numbers"    "$RESERVED_COLS"
-          load "$RAW/DEREG.txt"    "staging.faa_deregistered_aircraft" "$DEREG_COLS"
-          
-          # MASTER-*.txt (discover dynamically)
+
+          # ---- Load each file ----
+          load "$RAW/ACFTREF.txt"      "staging.faa_aircraft_references"      "$ACFTREF_COLS"
+          load "$RAW/ENGINE.txt"       "staging.faa_engine_references"        "$ENGINE_COLS"
+          load "$RAW/DEALER.txt"       "staging.faa_dealers"                  "$DEALER_COLS"
+          load "$RAW/DOCINDEX.txt"     "staging.faa_document_index"           "$DOCINDEX_COLS"
+          load "$RAW/RESERVED.txt"     "staging.faa_reserved_numbers"         "$RESERVED_COLS"
+          load "$RAW/DEREG.txt"        "staging.faa_deregistered_aircraft"    "$DEREG_COLS"
+
+          # MASTER-*.txt (dynamic discovery)
           curl -fsSL https://api.github.com/repos/simonw/scrape-faa-releasable-aircraft/contents/ \
             | grep -o 'MASTER-[0-9]\+\.txt' | sort -V | uniq | while read f; do
-                load "$RAW/$f" "staging.faa_aircraft_master" "$MASTER_COLS"
-              done
-
-  
+              load "$RAW/$f" "staging.faa_aircraft_master" "$MASTER_COLS"
+            done
