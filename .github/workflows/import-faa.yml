@@ -1,0 +1,63 @@
+name: Import FAA into Neon
+
+on:
+  # schedule:
+  #   - cron: "15 6 * * *"   # 06:15 UTC daily; adjust as you like
+  workflow_dispatch: {}
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install psql and iconv
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Load ACFTREF / ENGINE / DEALER / DOCINDEX / RESERVED / DEREG / MASTER-*.txt
+        env:
+          # DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}  # e.g. postgres://user:pass@ep-...neon.tech/neondb
+          DATABASE_URL: "postgresql://neondb_owner:npg_yUazAEhdt30r@ep-empty-hill-adm7gymq-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+          RAW: https://raw.githubusercontent.com/simonw/scrape-faa-releasable-aircraft/main
+        run: |
+          set -euo pipefail
+          export PGPASSWORD=$(python3 - <<'PY'
+          import re,sys,os
+          # If your DATABASE_URL has a password, psql will use it; otherwise skip.
+          print("")
+          PY
+          )
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SET statement_timeout = 0;"
+
+          # Helper: stream a remote CSV into a staging table
+          load () {
+            url="$1"; table="$2"
+            # FAA files are CSV with header; convert Windows-1252 → UTF-8 just in case of smart quotes.
+            curl -fsSL "$url" \
+              | iconv -f WINDOWS-1252 -t UTF-8 \
+              | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\copy ${table} FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
+          }
+
+          # 1) Truncate all staging tables first (fast, no indexes)
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          TRUNCATE TABLE
+            staging.faa_aircraft_references,
+            staging.faa_engine_references,
+            staging.faa_dealers,
+            staging.faa_document_index,
+            staging.faa_reserved_numbers,
+            staging.faa_deregistered_aircraft,
+            staging.faa_aircraft_master;
+          SQL
+
+          # 2) Load simple single-part files
+          load "$RAW/ACFTREF.txt"      "staging.faa_aircraft_references"
+          load "$RAW/ENGINE.txt"       "staging.faa_engine_references"
+          load "$RAW/DEALER.txt"       "staging.faa_dealers"
+          load "$RAW/DOCINDEX.txt"     "staging.faa_document_index"
+          load "$RAW/RESERVED.txt"     "staging.faa_reserved_numbers"
+          load "$RAW/DEREG.txt"        "staging.faa_deregistered_aircraft"
+
+          # 3) Load multi-part MASTER files (MASTER-1.txt ... MASTER-N.txt) without knowing N
+          curl -fsSL https://api.github.com/repos/simonw/scrape-faa-releasable-aircraft/contents/ \
+            | grep -o 'MASTER-[0-9]\+\.txt' | sort -V | uniq | while read f; do
+              load "$RAW/$f" "staging.faa_aircraft_master"
+            done
