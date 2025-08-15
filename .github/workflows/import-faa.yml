@@ -1,76 +1,359 @@
-name: Import FAA into Neon
+name: Load FAA data to Neon
 
 on:
-  workflow_dispatch: {}
-  # schedule:
-  #   - cron: "15 6 * * *"   # Uncomment to run daily at 06:15 UTC
+  workflow_dispatch:
+  schedule:
+    - cron: "20 6 * * *" # 06:20 UTC daily
 
 jobs:
-  load:
+  load-faa:
     runs-on: ubuntu-latest
+    env:
+      BASE_REPO: simonw/scrape-faa-releasable-aircraft
+      RAW_BASE: https://raw.githubusercontent.com/simonw/scrape-faa-releasable-aircraft/main
+      FAA_ACFTREF: ACFTREF.txt
+      FAA_ENGINE: ENGINE.txt
+      FAA_DEALER: DEALER.txt
+      FAA_DOCINDEX: DOCINDEX.txt
+      FAA_RESERVED: RESERVED.txt
+      FAA_DEREG: DEREG.txt
+      FAA_MASTER_MERGED: MASTER.txt
+      PGPASSWORD: ""  # not used; URL contains credentials
+      PGOPTIONS: "-c client_min_messages=warning"
     steps:
-      - name: Install psql and iconv
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
 
-      - name: Load FAA Data into Neon
-        env:
-          DATABASE_URL: "postgresql://neondb_owner:npg_yUazAEhdt30r@ep-empty-hill-adm7gymq-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-          RAW: https://raw.githubusercontent.com/simonw/scrape-faa-releasable-aircraft/main
+      - name: Install Postgres client + jq + curl + python3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client jq curl python3 python3-pip
+
+      - name: Discover and download MASTER-*.txt and other files
         run: |
           set -euo pipefail
 
-          # Ensure no statement timeout for bulk load
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SET statement_timeout = 0;"
+          work=/tmp/faa
+          mkdir -p "$work"
+          pushd "$work" >/dev/null
 
-          # Helper: stream + sanitize + load with explicit columns
-          load () {
-            url="$1"
-            table="$2"
-            cols="$3"
-            curl -fsSL "$url" \
-              | iconv -f WINDOWS-1252 -t UTF-8 \
-              | sed -E 's/\r$//; s/,+$//' \
-              | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-                  -c "\copy ${table} (${cols}) FROM STDIN WITH (FORMAT csv, HEADER true, NULL '', QUOTE '\"')"
-          }
+          echo "Discovering MASTER-*.txt..."
+          curl -fsSL "https://api.github.com/repos/${BASE_REPO}/contents/" \
+            | jq -r '.[].name' \
+            | grep -E '^MASTER-[0-9]+\.txt$' \
+            | sort -V > master_list.txt
 
-          # ---- FAA column lists (raw file order) ----
-          ACFTREF_COLS="code,aircraft_mfr_name,model_name,type_aircraft,type_engine,aircraft_category_code,builder_certification_code,number_of_engines,number_of_seats,aircraft_weight,aircraft_cruising_speed,tc_data_sheet,tc_data_holder"
+          if [ ! -s master_list.txt ]; then
+            echo "ERROR: No MASTER-*.txt files found"; exit 1
+          fi
 
-          ENGINE_COLS="code,engine_mfr_name,engine_model_name,type_engine,engine_horsepower,pounds_of_thrust"
+          echo "Downloading MASTER parts..."
+          : > "${FAA_MASTER_MERGED}"
+          while read -r f; do
+            echo "  - $f"
+            curl -fsSL "${RAW_BASE}/${f}" >> "${FAA_MASTER_MERGED}"
+          done < master_list.txt
 
-          DEALER_COLS="certificate_number,ownership_type,certificate_issue_date,expiration_date,expiration_flag,cumulative_issue_count,dealer_name,street1_address,street2_address,city,state,zip_code,country,region,county,other_names_count,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5"
+          echo "Downloading other FAA files..."
+          for f in "${FAA_ACFTREF}" "${FAA_ENGINE}" "${FAA_DEALER}" "${FAA_DOCINDEX}" "${FAA_RESERVED}" "${FAA_DEREG}"; do
+            echo "  - $f"
+            curl -fsSL "${RAW_BASE}/${f}" -o "$f"
+          done
 
-          DOCINDEX_COLS="document_id,type_collateral,collateral,name_of_party,document_receipt_date,processing_date,correction_date,correction_identification,serial_id,doc_type"
+          ls -lh
 
-          RESERVED_COLS="n_number,registrant_name,street_address,street2,city,state,zip_code,reserve_date,type_reservation,expiration_notice_date,n_number_for_change,purge_date"
+      - name: Convert fixed-width to CSV
+        run: |
+          set -euo pipefail
+          work=/tmp/faa
+          pushd "$work" >/dev/null
 
-          DEREG_COLS="n_number,serial_number,aircraft_mfr_mdl_code,eng_mfr_mdl_code,year_mfr,type_registrant,registrant_name,street,street2,city,state,zip_code,region,county,country,status_code,type_aircraft,type_engine,certification,last_action_date,cert_issue_date,air_worth_date,cancel_date,expiration_date,mode_s_code,mode_s_code_hex,fract_owner,unique_id,kit_mfr,kit_model,export_country,physical_address,physical_address_2,physical_city,physical_state,physical_zip_code,physical_county,physical_country,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5,reason_code"
+          cat > fw_to_csv.py << 'PY'
+import csv, sys, os
+from pathlib import Path
 
-          MASTER_COLS="n_number,serial_number,aircraft_mfr_mdl_code,eng_mfr_mdl_code,year_mfr,type_registrant,registrant_name,street,street2,city,state,zip_code,region,county,country,status_code,mode_s_code,fract_owner,type_aircraft,type_engine,certification,last_action_date,cert_issue_date,air_worth_date,expiration_date,unique_id,kit_mfr,kit_model,mode_s_code_hex,export_country,physical_address,physical_address_2,physical_city,physical_state,physical_zip_code,physical_county,physical_country,other_name_1,other_name_2,other_name_3,other_name_4,other_name_5"
+# Fixed-width layouts: names must match your DB column names & order in your schema.
+# Widths follow your Drizzle lengths (FAA reserves same positions; padded with spaces).
+layouts = {
+  "ACFTREF.txt": {
+    "outfile": "acftref.csv",
+    "fields": [
+      ("code", 7),
+      ("aircraft_mfr_name", 30),
+      ("model_name", 20),
+      ("type_aircraft", 1),
+      ("type_engine", 2),
+      ("aircraft_category_code", 1),
+      ("builder_certification_code", 1),
+      ("number_of_engines", 2),
+      ("number_of_seats", 3),
+      ("aircraft_weight", 7),          # FAA reserves 7 positions
+      ("aircraft_cruising_speed", 4),
+      ("tc_data_sheet", 15),
+      ("tc_data_holder", 50),
+    ],
+  },
+  "ENGINE.txt": {
+    "outfile": "engine.csv",
+    "fields": [
+      ("code", 5),
+      ("engine_mfr_name", 10),
+      ("engine_model_name", 13),
+      ("type_engine", 2),
+      ("engine_horsepower", 5),
+      ("pounds_of_thrust", 6),
+    ],
+  },
+  "MASTER.txt": {
+    "outfile": "master.csv",
+    "fields": [
+      ("n_number", 5),
+      ("serial_number", 30),
+      ("aircraft_mfr_mdl_code", 7),
+      ("eng_mfr_mdl_code", 5),
+      ("year_mfr", 4),
+      ("type_registrant", 1),
+      ("registrant_name", 50),
+      ("street", 33),
+      ("street2", 33),
+      ("city", 18),
+      ("state", 2),
+      ("zip_code", 10),
+      ("region", 1),
+      ("county", 3),
+      ("country", 2),
+      ("status_code", 2),
+      ("mode_s_code", 8),
+      ("fract_owner", 1),
+      ("type_aircraft", 1),
+      ("type_engine", 2),
+      ("certification", 1),
+      ("last_action_date", 8),
+      ("cert_issue_date", 8),
+      ("air_worth_date", 8),
+      ("expiration_date", 8),
+      ("unique_id", 8),
+      ("kit_mfr", 30),
+      ("kit_model", 20),
+      ("mode_s_code_hex", 10),
+      ("physical_address", 33),
+      ("physical_address_2", 33),
+      ("physical_city", 18),
+      ("physical_state", 2),
+      ("physical_zip_code", 10),
+      ("physical_county", 3),
+      ("physical_country", 2),
+      ("other_name_1", 50),
+      ("other_name_2", 50),
+      ("other_name_3", 50),
+      ("other_name_4", 50),
+      ("other_name_5", 50),
+      ("approved_operation_codes", 9),
+    ],
+  },
+  "DEALER.txt": {
+    "outfile": "dealer.csv",
+    "fields": [
+      ("certificate_number", 7),
+      ("dealer_name", 50),
+      ("ownership_type", 1),
+      ("street1_address", 33),
+      ("street2_address", 33),
+      ("city", 18),
+      ("state", 2),
+      ("zip_code", 10),
+      ("certificate_issue_date", 8),
+      ("expiration_date", 8),
+      ("expiration_flag", 1),
+      ("cumulative_issue_count", 4),
+      ("other_names_count", 2),
+      # 25 other names x 50
+      *[(f"other_name_{i:02d}", 50) for i in range(1, 26)],
+    ],
+  },
+  "DOCINDEX.txt": {
+    "outfile": "docindex.csv",
+    "fields": [
+      ("type_collateral", 1),
+      ("collateral", 37),
+      ("name_of_party", 50),
+      ("document_id", 12),
+      ("document_receipt_date", 8),
+      ("processing_date", 8),
+      ("correction_date", 8),
+      ("correction_identification", 1),
+      ("serial_id", 30),
+      ("doc_type", 3),  # 2024 update
+    ],
+  },
+  "RESERVED.txt": {
+    "outfile": "reserved.csv",
+    "fields": [
+      ("n_number", 5),
+      ("registrant_name", 50),
+      ("street_address", 33),
+      ("street2", 33),
+      ("city", 18),
+      ("state", 2),
+      ("zip_code", 10),
+      ("reserve_date", 8),
+      ("type_reservation", 2),
+      ("expiration_notice_date", 8),
+      ("n_number_for_change", 5),
+      ("purge_date", 8),
+    ],
+  },
+  "DEREG.txt": {
+    "outfile": "dereg.csv",
+    "fields": [
+      ("n_number", 5),
+      ("serial_number", 30),
+      ("aircraft_mfr_mdl_code", 7),
+      ("eng_mfr_mdl_code", 5),
+      ("year_mfr", 4),
+      ("type_registrant", 1),
+      ("registrant_name", 50),
+      ("street", 33),
+      ("street2", 33),
+      ("city", 18),
+      ("state", 2),
+      ("zip_code", 10),
+      ("region", 1),
+      ("county", 3),
+      ("country", 2),
+      ("status_code", 2),
+      ("type_aircraft", 1),
+      ("type_engine", 2),
+      ("certification", 1),
+      ("last_action_date", 8),
+      ("cert_issue_date", 8),
+      ("air_worth_date", 8),
+      ("cancel_date", 8),
+      ("expiration_date", 8),
+      ("mode_s_code", 8),
+      ("mode_s_code_hex", 10),
+      ("fract_owner", 1),
+      ("unique_id", 8),
+      ("kit_mfr", 30),
+      ("kit_model", 20),
+      ("export_country", 18),
+      ("physical_address", 33),
+      ("physical_address_2", 33),
+      ("physical_city", 18),
+      ("physical_state", 2),
+      ("physical_zip_code", 10),
+      ("physical_county", 3),
+      ("physical_country", 2),
+      ("other_name_1", 50),
+      ("other_name_2", 50),
+      ("other_name_3", 50),
+      ("other_name_4", 50),
+      ("other_name_5", 50),
+      ("reason_code", 2),
+      ("approved_operation_codes", 9),
+    ],
+  },
+}
 
-          # ---- Truncate staging ----
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
-          TRUNCATE TABLE
-            staging.faa_aircraft_references,
-            staging.faa_engine_references,
-            staging.faa_dealers,
-            staging.faa_document_index,
-            staging.faa_reserved_numbers,
-            staging.faa_deregistered_aircraft,
-            staging.faa_aircraft_master;
-          SQL
+def parse_fw_line(line, fields):
+  vals = []
+  start = 0
+  for name, width in fields:
+    seg = line[start:start+width]
+    # Strip only trailing spaces; keep leading zeros if any.
+    vals.append(seg.rstrip())
+    start += width
+  return vals
 
-          # ---- Load each file ----
-          load "$RAW/ACFTREF.txt"      "staging.faa_aircraft_references"      "$ACFTREF_COLS"
-          load "$RAW/ENGINE.txt"       "staging.faa_engine_references"        "$ENGINE_COLS"
-          load "$RAW/DEALER.txt"       "staging.faa_dealers"                  "$DEALER_COLS"
-          load "$RAW/DOCINDEX.txt"     "staging.faa_document_index"           "$DOCINDEX_COLS"
-          load "$RAW/RESERVED.txt"     "staging.faa_reserved_numbers"         "$RESERVED_COLS"
-          load "$RAW/DEREG.txt"        "staging.faa_deregistered_aircraft"    "$DEREG_COLS"
+def convert(infile, spec):
+  fields = spec["fields"]
+  out = spec["outfile"]
+  with open(infile, "r", encoding="utf-8", errors="ignore") as fin, \
+       open(out, "w", newline="", encoding="utf-8") as fout:
+    writer = csv.writer(fout)
+    writer.writerow([n for n,_ in fields])
+    for line in fin:
+      # Skip completely blank lines
+      if not line.strip():
+        continue
+      row = parse_fw_line(line.rstrip("\n"), fields)
+      writer.writerow(row)
 
-          # MASTER-*.txt (dynamic discovery)
-          curl -fsSL https://api.github.com/repos/simonw/scrape-faa-releasable-aircraft/contents/ \
-            | grep -o 'MASTER-[0-9]\+\.txt' | sort -V | uniq | while read f; do
-              load "$RAW/$f" "staging.faa_aircraft_master" "$MASTER_COLS"
-            done
+def main():
+  for src, spec in layouts.items():
+    if not Path(src).exists():
+      print(f"SKIP {src} (not found)")
+      continue
+    print(f"Converting {src} -> {spec['outfile']}")
+    convert(src, spec)
+
+if __name__ == "__main__":
+  main()
+PY
+
+          python3 fw_to_csv.py
+          ls -lh *.csv
+
+      - name: Load CSVs into Neon
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          work=/tmp/faa
+          pushd "$work" >/dev/null
+
+          export PGCONNECT_TIMEOUT=15
+          echo "Testing DB connection..."
+          psql "$DATABASE_URL" -tc "select now()"
+
+          echo "Loading ACFTREF..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_aircraft_references; \
+            COPY faa_aircraft_references (code, aircraft_mfr_name, model_name, type_aircraft, type_engine, aircraft_category_code, builder_certification_code, number_of_engines, number_of_seats, aircraft_weight, aircraft_cruising_speed, tc_data_sheet, tc_data_holder) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < acftref.csv
+
+          echo "Loading ENGINE..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_engine_references; \
+            COPY faa_engine_references (code, engine_mfr_name, engine_model_name, type_engine, engine_horsepower, pounds_of_thrust) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < engine.csv
+
+          echo "Loading MASTER..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_aircraft_master; \
+            COPY faa_aircraft_master (n_number, serial_number, aircraft_mfr_mdl_code, eng_mfr_mdl_code, year_mfr, type_registrant, registrant_name, street, street2, city, state, zip_code, region, county, country, status_code, mode_s_code, fract_owner, type_aircraft, type_engine, certification, last_action_date, cert_issue_date, air_worth_date, expiration_date, unique_id, kit_mfr, kit_model, mode_s_code_hex, physical_address, physical_address_2, physical_city, physical_state, physical_zip_code, physical_county, physical_country, other_name_1, other_name_2, other_name_3, other_name_4, other_name_5, approved_operation_codes) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < master.csv
+
+          echo "Loading DEALER..."
+          # Note: Dealer has many 'other_name_XX' columns; ensure order matches CSV header.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_dealers; \
+            COPY faa_dealers \
+            (certificate_number, dealer_name, ownership_type, street1_address, street2_address, city, state, zip_code, certificate_issue_date, expiration_date, expiration_flag, cumulative_issue_count, other_names_count, \
+             other_name_01, other_name_02, other_name_03, other_name_04, other_name_05, other_name_06, other_name_07, other_name_08, other_name_09, other_name_10, \
+             other_name_11, other_name_12, other_name_13, other_name_14, other_name_15, other_name_16, other_name_17, other_name_18, other_name_19, other_name_20, \
+             other_name_21, other_name_22, other_name_23, other_name_24, other_name_25) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < dealer.csv
+
+          echo "Loading DOCINDEX..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_document_index; \
+            COPY faa_document_index \
+            (type_collateral, collateral, name_of_party, document_id, document_receipt_date, processing_date, correction_date, correction_identification, serial_id, doc_type) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < docindex.csv
+
+          echo "Loading RESERVED..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_reserved_numbers; \
+            COPY faa_reserved_numbers \
+            (n_number, registrant_name, street_address, street2, city, state, zip_code, reserve_date, type_reservation, expiration_notice_date, n_number_for_change, purge_date) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < reserved.csv
+
+          echo "Loading DEREG..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
+            TRUNCATE TABLE faa_deregistered_aircraft; \
+            COPY faa_deregistered_aircraft \
+            (n_number, serial_number, aircraft_mfr_mdl_code, eng_mfr_mdl_code, year_mfr, type_registrant, registrant_name, street, street2, city, state, zip_code, region, county, country, status_code, type_aircraft, type_engine, certification, last_action_date, cert_issue_date, air_worth_date, cancel_date, expiration_date, mode_s_code, mode_s_code_hex, fract_owner, unique_id, kit_mfr, kit_model, export_country, physical_address, physical_address_2, physical_city, physical_state, physical_zip_code, physical_county, physical_country, other_name_1, other_name_2, other_name_3, other_name_4, other_name_5, reason_code, approved_operation_codes) \
+            FROM STDIN WITH (FORMAT csv, HEADER true);" < dereg.csv
+
+          echo "Done."
