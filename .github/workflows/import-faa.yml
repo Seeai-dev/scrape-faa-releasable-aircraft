@@ -304,20 +304,18 @@ jobs:
           echo "Testing DB connection..."
           psql "$DATABASE_URL" -tc "select now()"
 
-                    echo "Truncating tables in FK-safe order..."
+          echo "Truncating tables in FK-safe order..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           BEGIN;
-          -- 1) Children first
           TRUNCATE TABLE
             faa_aircraft_master,
             faa_deregistered_aircraft,
             faa_dealers,
             faa_document_index,
-            faa_reserved_numbers;
-          -- 2) Then parents (referenced tables)
-          TRUNCATE TABLE
+            faa_reserved_numbers,
             faa_aircraft_references,
-            faa_engine_references;
+            faa_engine_references
+          RESTART IDENTITY CASCADE;
           COMMIT;
           SQL
 
