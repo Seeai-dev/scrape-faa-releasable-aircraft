@@ -2,8 +2,6 @@ name: Load FAA data to Neon
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "20 6 * * *" # 06:20 UTC daily
 
 jobs:
   load-faa:
