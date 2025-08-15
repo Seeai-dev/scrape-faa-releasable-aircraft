@@ -1,7 +1,9 @@
 name: Load FAA data to Neon
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *'
 
 jobs:
   load-faa:
