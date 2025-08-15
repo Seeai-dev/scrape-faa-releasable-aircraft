@@ -263,19 +263,41 @@ jobs:
               start += width
             return vals
           
+          import re
+
           def convert(infile, spec):
-            fields = spec["fields"]
-            out = spec["outfile"]
-            with open(infile, "r", encoding="utf-8", errors="ignore") as fin, \
-                 open(out, "w", newline="", encoding="utf-8") as fout:
-              writer = csv.writer(fout)
-              writer.writerow([n for n,_ in fields])
-              for line in fin:
-                # Skip completely blank lines
-                if not line.strip():
-                  continue
-                row = parse_fw_line(line.rstrip("\n"), fields)
-                writer.writerow(row)
+              fields = spec["fields"]
+              out = spec["outfile"]
+              expected = sum(w for _, w in fields)
+          
+              # Only apply N-number validation for MASTER and DEREG
+              n_number_re = re.compile(r"^N[0-9A-Z]+$")
+          
+              with open(infile, "r", encoding="utf-8-sig", errors="ignore") as fin, \
+                   open(out, "w", newline="", encoding="utf-8") as fout:
+                  writer = csv.writer(fout)
+                  writer.writerow([n for n,_ in fields])
+          
+                  for lineno, raw in enumerate(fin, start=1):
+                      line = raw.rstrip("\r\n")
+                      if not line.strip():
+                          continue
+          
+                      # normalize to expected fixed width
+                      if len(line) < expected:
+                          line = line.ljust(expected)
+                      elif len(line) > expected:
+                          line = line[:expected]
+          
+                      row = parse_fw_line(line, fields)
+          
+                      # N-number check
+                      if infile in ("MASTER.txt", "DEREG.txt"):
+                          n_num = row[0]  # first column
+                          if not n_number_re.match(n_num):
+                              print(f"[WARN] {infile}:{lineno} has suspicious N-number: {repr(n_num)}")
+          
+                      writer.writerow(row)
           
           def main():
             for src, spec in layouts.items():
