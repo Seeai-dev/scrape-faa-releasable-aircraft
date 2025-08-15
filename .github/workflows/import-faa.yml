@@ -304,28 +304,41 @@ jobs:
           echo "Testing DB connection..."
           psql "$DATABASE_URL" -tc "select now()"
 
+                    echo "Truncating tables in FK-safe order..."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          BEGIN;
+          -- 1) Children first
+          TRUNCATE TABLE
+            faa_aircraft_master,
+            faa_deregistered_aircraft,
+            faa_dealers,
+            faa_document_index,
+            faa_reserved_numbers;
+          -- 2) Then parents (referenced tables)
+          TRUNCATE TABLE
+            faa_aircraft_references,
+            faa_engine_references;
+          COMMIT;
+          SQL
+
           echo "Loading ACFTREF..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-            TRUNCATE TABLE faa_aircraft_references; \
             COPY faa_aircraft_references (code, aircraft_mfr_name, model_name, type_aircraft, type_engine, aircraft_category_code, builder_certification_code, number_of_engines, number_of_seats, aircraft_weight, aircraft_cruising_speed, tc_data_sheet, tc_data_holder) \
             FROM STDIN WITH (FORMAT csv, HEADER true);" < acftref.csv
 
           echo "Loading ENGINE..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-            TRUNCATE TABLE faa_engine_references; \
             COPY faa_engine_references (code, engine_mfr_name, engine_model_name, type_engine, engine_horsepower, pounds_of_thrust) \
             FROM STDIN WITH (FORMAT csv, HEADER true);" < engine.csv
 
           echo "Loading MASTER..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-            TRUNCATE TABLE faa_aircraft_master; \
             COPY faa_aircraft_master (n_number, serial_number, aircraft_mfr_mdl_code, eng_mfr_mdl_code, year_mfr, type_registrant, registrant_name, street, street2, city, state, zip_code, region, county, country, status_code, mode_s_code, fract_owner, type_aircraft, type_engine, certification, last_action_date, cert_issue_date, air_worth_date, expiration_date, unique_id, kit_mfr, kit_model, mode_s_code_hex, physical_address, physical_address_2, physical_city, physical_state, physical_zip_code, physical_county, physical_country, other_name_1, other_name_2, other_name_3, other_name_4, other_name_5, approved_operation_codes) \
             FROM STDIN WITH (FORMAT csv, HEADER true);" < master.csv
 
           echo "Loading DEALER..."
           # Note: Dealer has many 'other_name_XX' columns; ensure order matches CSV header.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-            TRUNCATE TABLE faa_dealers; \
             COPY faa_dealers \
             (certificate_number, dealer_name, ownership_type, street1_address, street2_address, city, state, zip_code, certificate_issue_date, expiration_date, expiration_flag, cumulative_issue_count, other_names_count, \
              other_name_01, other_name_02, other_name_03, other_name_04, other_name_05, other_name_06, other_name_07, other_name_08, other_name_09, other_name_10, \
@@ -335,14 +348,12 @@ jobs:
 
           echo "Loading DOCINDEX..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-            TRUNCATE TABLE faa_document_index; \
             COPY faa_document_index \
             (type_collateral, collateral, name_of_party, document_id, document_receipt_date, processing_date, correction_date, correction_identification, serial_id, doc_type) \
             FROM STDIN WITH (FORMAT csv, HEADER true);" < docindex.csv
 
           echo "Loading RESERVED..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-            TRUNCATE TABLE faa_reserved_numbers; \
             COPY faa_reserved_numbers \
             (n_number, registrant_name, street_address, street2, city, state, zip_code, reserve_date, type_reservation, expiration_notice_date, n_number_for_change, purge_date) \
             FROM STDIN WITH (FORMAT csv, HEADER true);" < reserved.csv
