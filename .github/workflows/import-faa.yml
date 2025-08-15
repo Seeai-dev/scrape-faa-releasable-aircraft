@@ -1,8 +1,8 @@
 name: Load FAA data to Neon
 
 on:
-  workflow_dispatch:
-
+  workflow_dispatch: {}
+  
 jobs:
   load-faa:
     runs-on: ubuntu-latest
