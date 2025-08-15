@@ -2,7 +2,7 @@ name: Load FAA data to Neon
 
 on:
   workflow_dispatch: {}
-  
+
 jobs:
   load-faa:
     runs-on: ubuntu-latest
@@ -15,9 +15,6 @@ jobs:
       FAA_DOCINDEX: DOCINDEX.txt
       FAA_RESERVED: RESERVED.txt
       # FAA_DEREG: DEREG.txt
-      FAA_MASTER_MERGED: MASTER.txt
-      PGPASSWORD: ""  # not used; URL contains credentials
-      PGOPTIONS: "-c client_min_messages=warning"
     steps:
       - name: Checkout (optional)
         uses: actions/checkout@v4
@@ -46,10 +43,9 @@ jobs:
           fi
 
           echo "Downloading MASTER parts..."
-          : > "${FAA_MASTER_MERGED}"
           while read -r f; do
             echo "  - $f"
-            curl -fsSL "${RAW_BASE}/${f}" >> "${FAA_MASTER_MERGED}"
+            curl -fsSL "${RAW_BASE}/${f}" -o "$f"
           done < master_list.txt
 
           echo "Downloading other FAA files..."
@@ -60,195 +56,64 @@ jobs:
 
           ls -lh
 
-      - name: Convert fixed-width to CSV
+      - name: Convert fixed-width to CSV (ACFTREF/ENGINE/DEALER/DOCINDEX/RESERVED)
         run: |
           set -euo pipefail
           work=/tmp/faa
           pushd "$work" >/dev/null
 
           cat > fw_to_csv.py << 'PY'
-          import csv, sys, os
+          import csv
           from pathlib import Path
           
-          # Fixed-width layouts: names must match your DB column names & order in your schema.
-          # Widths follow your Drizzle lengths (FAA reserves same positions; padded with spaces).
           layouts = {
             "ACFTREF.txt": {
               "outfile": "acftref.csv",
               "fields": [
-                ("code", 7),
-                ("aircraft_mfr_name", 30),
-                ("model_name", 20),
-                ("type_aircraft", 1),
-                ("type_engine", 2),
-                ("aircraft_category_code", 1),
-                ("builder_certification_code", 1),
-                ("number_of_engines", 2),
-                ("number_of_seats", 3),
-                ("aircraft_weight", 7),          # FAA reserves 7 positions
-                ("aircraft_cruising_speed", 4),
-                ("tc_data_sheet", 15),
+                ("code", 7), ("aircraft_mfr_name", 30), ("model_name", 20),
+                ("type_aircraft", 1), ("type_engine", 2), ("aircraft_category_code", 1),
+                ("builder_certification_code", 1), ("number_of_engines", 2),
+                ("number_of_seats", 3), ("aircraft_weight", 7),
+                ("aircraft_cruising_speed", 4), ("tc_data_sheet", 15),
                 ("tc_data_holder", 50),
               ],
             },
             "ENGINE.txt": {
               "outfile": "engine.csv",
               "fields": [
-                ("code", 5),
-                ("engine_mfr_name", 10),
-                ("engine_model_name", 13),
-                ("type_engine", 2),
-                ("engine_horsepower", 5),
-                ("pounds_of_thrust", 6),
-              ],
-            },
-            "MASTER.txt": {
-              "outfile": "master.csv",
-              "fields": [
-                ("n_number", 5),
-                ("serial_number", 30),
-                ("aircraft_mfr_mdl_code", 7),
-                ("eng_mfr_mdl_code", 5),
-                ("year_mfr", 4),
-                ("type_registrant", 1),
-                ("registrant_name", 50),
-                ("street", 33),
-                ("street2", 33),
-                ("city", 18),
-                ("state", 2),
-                ("zip_code", 10),
-                ("region", 1),
-                ("county", 3),
-                ("country", 2),
-                ("status_code", 2),
-                ("mode_s_code", 8),
-                ("fract_owner", 1),
-                ("type_aircraft", 1),
-                ("type_engine", 2),
-                ("certification", 1),
-                ("last_action_date", 8),
-                ("cert_issue_date", 8),
-                ("air_worth_date", 8),
-                ("expiration_date", 8),
-                ("unique_id", 8),
-                ("kit_mfr", 30),
-                ("kit_model", 20),
-                ("mode_s_code_hex", 10),
-                ("physical_address", 33),
-                ("physical_address_2", 33),
-                ("physical_city", 18),
-                ("physical_state", 2),
-                ("physical_zip_code", 10),
-                ("physical_county", 3),
-                ("physical_country", 2),
-                ("other_name_1", 50),
-                ("other_name_2", 50),
-                ("other_name_3", 50),
-                ("other_name_4", 50),
-                ("other_name_5", 50),
-                ("approved_operation_codes", 9),
+                ("code", 5), ("engine_mfr_name", 10), ("engine_model_name", 13),
+                ("type_engine", 2), ("engine_horsepower", 5), ("pounds_of_thrust", 6),
               ],
             },
             "DEALER.txt": {
               "outfile": "dealer.csv",
               "fields": [
-                ("certificate_number", 7),
-                ("dealer_name", 50),
-                ("ownership_type", 1),
-                ("street1_address", 33),
-                ("street2_address", 33),
-                ("city", 18),
-                ("state", 2),
-                ("zip_code", 10),
-                ("certificate_issue_date", 8),
-                ("expiration_date", 8),
-                ("expiration_flag", 1),
-                ("cumulative_issue_count", 4),
-                ("other_names_count", 2),
-                # 25 other names x 50
+                ("certificate_number", 7), ("dealer_name", 50), ("ownership_type", 1),
+                ("street1_address", 33), ("street2_address", 33), ("city", 18),
+                ("state", 2), ("zip_code", 10), ("certificate_issue_date", 8),
+                ("expiration_date", 8), ("expiration_flag", 1),
+                ("cumulative_issue_count", 4), ("other_names_count", 2),
                 *[(f"other_name_{i:02d}", 50) for i in range(1, 26)],
               ],
             },
             "DOCINDEX.txt": {
               "outfile": "docindex.csv",
               "fields": [
-                ("type_collateral", 1),
-                ("collateral", 37),
-                ("name_of_party", 50),
-                ("document_id", 12),
-                ("document_receipt_date", 8),
-                ("processing_date", 8),
-                ("correction_date", 8),
-                ("correction_identification", 1),
-                ("serial_id", 30),
-                ("doc_type", 3),  # 2024 update
+                ("type_collateral", 1), ("collateral", 37), ("name_of_party", 50),
+                ("document_id", 12), ("document_receipt_date", 8),
+                ("processing_date", 8), ("correction_date", 8),
+                ("correction_identification", 1), ("serial_id", 30),
+                ("doc_type", 3),
               ],
             },
             "RESERVED.txt": {
               "outfile": "reserved.csv",
               "fields": [
-                ("n_number", 5),
-                ("registrant_name", 50),
-                ("street_address", 33),
-                ("street2", 33),
-                ("city", 18),
-                ("state", 2),
-                ("zip_code", 10),
-                ("reserve_date", 8),
-                ("type_reservation", 2),
-                ("expiration_notice_date", 8),
-                ("n_number_for_change", 5),
+                ("n_number", 5), ("registrant_name", 50), ("street_address", 33),
+                ("street2", 33), ("city", 18), ("state", 2), ("zip_code", 10),
+                ("reserve_date", 8), ("type_reservation", 2),
+                ("expiration_notice_date", 8), ("n_number_for_change", 5),
                 ("purge_date", 8),
-              ],
-            },
-            "DEREG.txt": {
-              "outfile": "dereg.csv",
-              "fields": [
-                ("n_number", 5),
-                ("serial_number", 30),
-                ("aircraft_mfr_mdl_code", 7),
-                ("eng_mfr_mdl_code", 5),
-                ("year_mfr", 4),
-                ("type_registrant", 1),
-                ("registrant_name", 50),
-                ("street", 33),
-                ("street2", 33),
-                ("city", 18),
-                ("state", 2),
-                ("zip_code", 10),
-                ("region", 1),
-                ("county", 3),
-                ("country", 2),
-                ("status_code", 2),
-                ("type_aircraft", 1),
-                ("type_engine", 2),
-                ("certification", 1),
-                ("last_action_date", 8),
-                ("cert_issue_date", 8),
-                ("air_worth_date", 8),
-                ("cancel_date", 8),
-                ("expiration_date", 8),
-                ("mode_s_code", 8),
-                ("mode_s_code_hex", 10),
-                ("fract_owner", 1),
-                ("unique_id", 8),
-                ("kit_mfr", 30),
-                ("kit_model", 20),
-                ("export_country", 18),
-                ("physical_address", 33),
-                ("physical_address_2", 33),
-                ("physical_city", 18),
-                ("physical_state", 2),
-                ("physical_zip_code", 10),
-                ("physical_county", 3),
-                ("physical_country", 2),
-                ("other_name_1", 50),
-                ("other_name_2", 50),
-                ("other_name_3", 50),
-                ("other_name_4", 50),
-                ("other_name_5", 50),
-                ("reason_code", 2),
-                ("approved_operation_codes", 9),
               ],
             },
           }
@@ -256,48 +121,27 @@ jobs:
           def parse_fw_line(line, fields):
             vals = []
             start = 0
-            for name, width in fields:
+            for _, width in fields:
               seg = line[start:start+width]
-              # Strip only trailing spaces; keep leading zeros if any.
               vals.append(seg.rstrip())
               start += width
             return vals
           
-          import re
-
           def convert(infile, spec):
-              fields = spec["fields"]
-              out = spec["outfile"]
-              expected = sum(w for _, w in fields)
-          
-              # Only apply N-number validation for MASTER and DEREG
-              n_number_re = re.compile(r"^N[0-9A-Z]+$")
-          
-              with open(infile, "r", encoding="utf-8-sig", errors="ignore") as fin, \
-                   open(out, "w", newline="", encoding="utf-8") as fout:
-                  writer = csv.writer(fout)
-                  writer.writerow([n for n,_ in fields])
-          
-                  for lineno, raw in enumerate(fin, start=1):
-                      line = raw.rstrip("\r\n")
-                      if not line.strip():
-                          continue
-          
-                      # normalize to expected fixed width
-                      if len(line) < expected:
-                          line = line.ljust(expected)
-                      elif len(line) > expected:
-                          line = line[:expected]
-          
-                      row = parse_fw_line(line, fields)
-          
-                      # N-number check
-                      if infile in ("MASTER.txt", "DEREG.txt"):
-                          n_num = row[0]  # first column
-                          if not n_number_re.match(n_num):
-                              print(f"[WARN] {infile}:{lineno} has suspicious N-number: {repr(n_num)}")
-          
-                      writer.writerow(row)
+            fields = spec["fields"]
+            expected = sum(w for _, w in fields)
+            out = spec["outfile"]
+            with open(infile, "r", encoding="utf-8-sig", errors="ignore") as fin, \
+                 open(out, "w", newline="", encoding="utf-8") as fout:
+              w = csv.writer(fout)
+              w.writerow([n for n,_ in fields])
+              for raw in fin:
+                line = raw.rstrip("\r\n")
+                if not line.strip():
+                  continue
+                if len(line) < expected: line = line.ljust(expected)
+                elif len(line) > expected: line = line[:expected]
+                w.writerow(parse_fw_line(line, fields))
           
           def main():
             for src, spec in layouts.items():
@@ -310,13 +154,76 @@ jobs:
           if __name__ == "__main__":
             main()
           PY
-          
-                    python3 fw_to_csv.py
-                    ls -lh *.csv
+
+          python3 fw_to_csv.py
+          ls -lh *.csv || true
+
+      - name: Convert MASTER parts to a single CSV (BOM-safe, validates N-numbers)
+        run: |
+          set -euo pipefail
+          work=/tmp/faa
+          pushd "$work" >/dev/null
+
+          rm -f master.csv
+
+          while read -r f; do
+            echo "Converting $f -> master_part.csv"
+            python3 - << 'PY' "$f"
+            import csv, re, sys
+            fields = [
+              ("n_number", 5), ("serial_number", 30), ("aircraft_mfr_mdl_code", 7),
+              ("eng_mfr_mdl_code", 5), ("year_mfr", 4), ("type_registrant", 1),
+              ("registrant_name", 50), ("street", 33), ("street2", 33), ("city", 18),
+              ("state", 2), ("zip_code", 10), ("region", 1), ("county", 3), ("country", 2),
+              ("status_code", 2), ("mode_s_code", 8), ("fract_owner", 1),
+              ("type_aircraft", 1), ("type_engine", 2), ("certification", 1),
+              ("last_action_date", 8), ("cert_issue_date", 8), ("air_worth_date", 8),
+              ("expiration_date", 8), ("unique_id", 8), ("kit_mfr", 30), ("kit_model", 20),
+              ("mode_s_code_hex", 10), ("physical_address", 33), ("physical_address_2", 33),
+              ("physical_city", 18), ("physical_state", 2), ("physical_zip_code", 10),
+              ("physical_county", 3), ("physical_country", 2), ("other_name_1", 50),
+              ("other_name_2", 50), ("other_name_3", 50), ("other_name_4", 50),
+              ("other_name_5", 50), ("approved_operation_codes", 9),
+            ]
+            fw = sum(w for _, w in fields)
+            re_n = re.compile(r"^N[0-9A-Z]+$")
+            
+            src = sys.argv[1]
+            with open(src, "r", encoding="utf-8-sig", errors="ignore") as fin, \
+                 open("master_part.csv", "w", newline="", encoding="utf-8") as fout:
+                w = csv.writer(fout)
+                w.writerow([n for n,_ in fields])
+                for i, raw in enumerate(fin, 1):
+                    line = raw.rstrip("\r\n")
+                    if not line.strip():
+                        continue
+                    if len(line) < fw: line = line.ljust(fw)
+                    elif len(line) > fw: line = line[:fw]
+                    vals, start = [], 0
+                    for _, width in fields:
+                        seg = line[start:start+width]
+                        vals.append(seg.rstrip())
+                        start += width
+                    if not re_n.match(vals[0]):
+                        print(f"[WARN] {src}:{i} skipping suspicious N-number: {repr(vals[0])}")
+                        continue
+                    w.writerow(vals)
+            PY
+
+            if [ ! -f master.csv ]; then
+              mv master_part.csv master.csv
+            else
+              # append without header
+              tail -n +2 master_part.csv >> master.csv
+              rm -f master_part.csv
+            fi
+          done < master_list.txt
+
+          ls -lh master.csv
 
       - name: Load CSVs into Neon
         env:
-          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}  # use UNPOOLED host
         run: |
           set -euo pipefail
           work=/tmp/faa
@@ -329,15 +236,17 @@ jobs:
           echo "Truncating tables in FK-safe order..."
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           BEGIN;
+          -- children first
           TRUNCATE TABLE
             faa_aircraft_master,
             faa_deregistered_aircraft,
             faa_dealers,
             faa_document_index,
-            faa_reserved_numbers,
+            faa_reserved_numbers;
+          -- then parents
+          TRUNCATE TABLE
             faa_aircraft_references,
-            faa_engine_references
-          RESTART IDENTITY CASCADE;
+            faa_engine_references;
           COMMIT;
           SQL
 
@@ -357,7 +266,6 @@ jobs:
             FROM STDIN WITH (FORMAT csv, HEADER true);" < master.csv
 
           echo "Loading DEALER..."
-          # Note: Dealer has many 'other_name_XX' columns; ensure order matches CSV header.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
             COPY faa_dealers \
             (certificate_number, dealer_name, ownership_type, street1_address, street2_address, city, state, zip_code, certificate_issue_date, expiration_date, expiration_flag, cumulative_issue_count, other_names_count, \
@@ -380,7 +288,6 @@ jobs:
 
           # echo "Loading DEREG..."
           # psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "\
-          #   TRUNCATE TABLE faa_deregistered_aircraft; \
           #   COPY faa_deregistered_aircraft \
           #   (n_number, serial_number, aircraft_mfr_mdl_code, eng_mfr_mdl_code, year_mfr, type_registrant, registrant_name, street, street2, city, state, zip_code, region, county, country, status_code, type_aircraft, type_engine, certification, last_action_date, cert_issue_date, air_worth_date, cancel_date, expiration_date, mode_s_code, mode_s_code_hex, fract_owner, unique_id, kit_mfr, kit_model, export_country, physical_address, physical_address_2, physical_city, physical_state, physical_zip_code, physical_county, physical_country, other_name_1, other_name_2, other_name_3, other_name_4, other_name_5, reason_code, approved_operation_codes) \
           #   FROM STDIN WITH (FORMAT csv, HEADER true);" < dereg.csv
