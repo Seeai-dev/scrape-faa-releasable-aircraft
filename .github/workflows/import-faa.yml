@@ -67,230 +67,230 @@ jobs:
           pushd "$work" >/dev/null
 
           cat > fw_to_csv.py << 'PY'
-import csv, sys, os
-from pathlib import Path
-
-# Fixed-width layouts: names must match your DB column names & order in your schema.
-# Widths follow your Drizzle lengths (FAA reserves same positions; padded with spaces).
-layouts = {
-  "ACFTREF.txt": {
-    "outfile": "acftref.csv",
-    "fields": [
-      ("code", 7),
-      ("aircraft_mfr_name", 30),
-      ("model_name", 20),
-      ("type_aircraft", 1),
-      ("type_engine", 2),
-      ("aircraft_category_code", 1),
-      ("builder_certification_code", 1),
-      ("number_of_engines", 2),
-      ("number_of_seats", 3),
-      ("aircraft_weight", 7),          # FAA reserves 7 positions
-      ("aircraft_cruising_speed", 4),
-      ("tc_data_sheet", 15),
-      ("tc_data_holder", 50),
-    ],
-  },
-  "ENGINE.txt": {
-    "outfile": "engine.csv",
-    "fields": [
-      ("code", 5),
-      ("engine_mfr_name", 10),
-      ("engine_model_name", 13),
-      ("type_engine", 2),
-      ("engine_horsepower", 5),
-      ("pounds_of_thrust", 6),
-    ],
-  },
-  "MASTER.txt": {
-    "outfile": "master.csv",
-    "fields": [
-      ("n_number", 5),
-      ("serial_number", 30),
-      ("aircraft_mfr_mdl_code", 7),
-      ("eng_mfr_mdl_code", 5),
-      ("year_mfr", 4),
-      ("type_registrant", 1),
-      ("registrant_name", 50),
-      ("street", 33),
-      ("street2", 33),
-      ("city", 18),
-      ("state", 2),
-      ("zip_code", 10),
-      ("region", 1),
-      ("county", 3),
-      ("country", 2),
-      ("status_code", 2),
-      ("mode_s_code", 8),
-      ("fract_owner", 1),
-      ("type_aircraft", 1),
-      ("type_engine", 2),
-      ("certification", 1),
-      ("last_action_date", 8),
-      ("cert_issue_date", 8),
-      ("air_worth_date", 8),
-      ("expiration_date", 8),
-      ("unique_id", 8),
-      ("kit_mfr", 30),
-      ("kit_model", 20),
-      ("mode_s_code_hex", 10),
-      ("physical_address", 33),
-      ("physical_address_2", 33),
-      ("physical_city", 18),
-      ("physical_state", 2),
-      ("physical_zip_code", 10),
-      ("physical_county", 3),
-      ("physical_country", 2),
-      ("other_name_1", 50),
-      ("other_name_2", 50),
-      ("other_name_3", 50),
-      ("other_name_4", 50),
-      ("other_name_5", 50),
-      ("approved_operation_codes", 9),
-    ],
-  },
-  "DEALER.txt": {
-    "outfile": "dealer.csv",
-    "fields": [
-      ("certificate_number", 7),
-      ("dealer_name", 50),
-      ("ownership_type", 1),
-      ("street1_address", 33),
-      ("street2_address", 33),
-      ("city", 18),
-      ("state", 2),
-      ("zip_code", 10),
-      ("certificate_issue_date", 8),
-      ("expiration_date", 8),
-      ("expiration_flag", 1),
-      ("cumulative_issue_count", 4),
-      ("other_names_count", 2),
-      # 25 other names x 50
-      *[(f"other_name_{i:02d}", 50) for i in range(1, 26)],
-    ],
-  },
-  "DOCINDEX.txt": {
-    "outfile": "docindex.csv",
-    "fields": [
-      ("type_collateral", 1),
-      ("collateral", 37),
-      ("name_of_party", 50),
-      ("document_id", 12),
-      ("document_receipt_date", 8),
-      ("processing_date", 8),
-      ("correction_date", 8),
-      ("correction_identification", 1),
-      ("serial_id", 30),
-      ("doc_type", 3),  # 2024 update
-    ],
-  },
-  "RESERVED.txt": {
-    "outfile": "reserved.csv",
-    "fields": [
-      ("n_number", 5),
-      ("registrant_name", 50),
-      ("street_address", 33),
-      ("street2", 33),
-      ("city", 18),
-      ("state", 2),
-      ("zip_code", 10),
-      ("reserve_date", 8),
-      ("type_reservation", 2),
-      ("expiration_notice_date", 8),
-      ("n_number_for_change", 5),
-      ("purge_date", 8),
-    ],
-  },
-  "DEREG.txt": {
-    "outfile": "dereg.csv",
-    "fields": [
-      ("n_number", 5),
-      ("serial_number", 30),
-      ("aircraft_mfr_mdl_code", 7),
-      ("eng_mfr_mdl_code", 5),
-      ("year_mfr", 4),
-      ("type_registrant", 1),
-      ("registrant_name", 50),
-      ("street", 33),
-      ("street2", 33),
-      ("city", 18),
-      ("state", 2),
-      ("zip_code", 10),
-      ("region", 1),
-      ("county", 3),
-      ("country", 2),
-      ("status_code", 2),
-      ("type_aircraft", 1),
-      ("type_engine", 2),
-      ("certification", 1),
-      ("last_action_date", 8),
-      ("cert_issue_date", 8),
-      ("air_worth_date", 8),
-      ("cancel_date", 8),
-      ("expiration_date", 8),
-      ("mode_s_code", 8),
-      ("mode_s_code_hex", 10),
-      ("fract_owner", 1),
-      ("unique_id", 8),
-      ("kit_mfr", 30),
-      ("kit_model", 20),
-      ("export_country", 18),
-      ("physical_address", 33),
-      ("physical_address_2", 33),
-      ("physical_city", 18),
-      ("physical_state", 2),
-      ("physical_zip_code", 10),
-      ("physical_county", 3),
-      ("physical_country", 2),
-      ("other_name_1", 50),
-      ("other_name_2", 50),
-      ("other_name_3", 50),
-      ("other_name_4", 50),
-      ("other_name_5", 50),
-      ("reason_code", 2),
-      ("approved_operation_codes", 9),
-    ],
-  },
-}
-
-def parse_fw_line(line, fields):
-  vals = []
-  start = 0
-  for name, width in fields:
-    seg = line[start:start+width]
-    # Strip only trailing spaces; keep leading zeros if any.
-    vals.append(seg.rstrip())
-    start += width
-  return vals
-
-def convert(infile, spec):
-  fields = spec["fields"]
-  out = spec["outfile"]
-  with open(infile, "r", encoding="utf-8", errors="ignore") as fin, \
-       open(out, "w", newline="", encoding="utf-8") as fout:
-    writer = csv.writer(fout)
-    writer.writerow([n for n,_ in fields])
-    for line in fin:
-      # Skip completely blank lines
-      if not line.strip():
-        continue
-      row = parse_fw_line(line.rstrip("\n"), fields)
-      writer.writerow(row)
-
-def main():
-  for src, spec in layouts.items():
-    if not Path(src).exists():
-      print(f"SKIP {src} (not found)")
-      continue
-    print(f"Converting {src} -> {spec['outfile']}")
-    convert(src, spec)
-
-if __name__ == "__main__":
-  main()
-PY
-
-          python3 fw_to_csv.py
-          ls -lh *.csv
+          import csv, sys, os
+          from pathlib import Path
+          
+          # Fixed-width layouts: names must match your DB column names & order in your schema.
+          # Widths follow your Drizzle lengths (FAA reserves same positions; padded with spaces).
+          layouts = {
+            "ACFTREF.txt": {
+              "outfile": "acftref.csv",
+              "fields": [
+                ("code", 7),
+                ("aircraft_mfr_name", 30),
+                ("model_name", 20),
+                ("type_aircraft", 1),
+                ("type_engine", 2),
+                ("aircraft_category_code", 1),
+                ("builder_certification_code", 1),
+                ("number_of_engines", 2),
+                ("number_of_seats", 3),
+                ("aircraft_weight", 7),          # FAA reserves 7 positions
+                ("aircraft_cruising_speed", 4),
+                ("tc_data_sheet", 15),
+                ("tc_data_holder", 50),
+              ],
+            },
+            "ENGINE.txt": {
+              "outfile": "engine.csv",
+              "fields": [
+                ("code", 5),
+                ("engine_mfr_name", 10),
+                ("engine_model_name", 13),
+                ("type_engine", 2),
+                ("engine_horsepower", 5),
+                ("pounds_of_thrust", 6),
+              ],
+            },
+            "MASTER.txt": {
+              "outfile": "master.csv",
+              "fields": [
+                ("n_number", 5),
+                ("serial_number", 30),
+                ("aircraft_mfr_mdl_code", 7),
+                ("eng_mfr_mdl_code", 5),
+                ("year_mfr", 4),
+                ("type_registrant", 1),
+                ("registrant_name", 50),
+                ("street", 33),
+                ("street2", 33),
+                ("city", 18),
+                ("state", 2),
+                ("zip_code", 10),
+                ("region", 1),
+                ("county", 3),
+                ("country", 2),
+                ("status_code", 2),
+                ("mode_s_code", 8),
+                ("fract_owner", 1),
+                ("type_aircraft", 1),
+                ("type_engine", 2),
+                ("certification", 1),
+                ("last_action_date", 8),
+                ("cert_issue_date", 8),
+                ("air_worth_date", 8),
+                ("expiration_date", 8),
+                ("unique_id", 8),
+                ("kit_mfr", 30),
+                ("kit_model", 20),
+                ("mode_s_code_hex", 10),
+                ("physical_address", 33),
+                ("physical_address_2", 33),
+                ("physical_city", 18),
+                ("physical_state", 2),
+                ("physical_zip_code", 10),
+                ("physical_county", 3),
+                ("physical_country", 2),
+                ("other_name_1", 50),
+                ("other_name_2", 50),
+                ("other_name_3", 50),
+                ("other_name_4", 50),
+                ("other_name_5", 50),
+                ("approved_operation_codes", 9),
+              ],
+            },
+            "DEALER.txt": {
+              "outfile": "dealer.csv",
+              "fields": [
+                ("certificate_number", 7),
+                ("dealer_name", 50),
+                ("ownership_type", 1),
+                ("street1_address", 33),
+                ("street2_address", 33),
+                ("city", 18),
+                ("state", 2),
+                ("zip_code", 10),
+                ("certificate_issue_date", 8),
+                ("expiration_date", 8),
+                ("expiration_flag", 1),
+                ("cumulative_issue_count", 4),
+                ("other_names_count", 2),
+                # 25 other names x 50
+                *[(f"other_name_{i:02d}", 50) for i in range(1, 26)],
+              ],
+            },
+            "DOCINDEX.txt": {
+              "outfile": "docindex.csv",
+              "fields": [
+                ("type_collateral", 1),
+                ("collateral", 37),
+                ("name_of_party", 50),
+                ("document_id", 12),
+                ("document_receipt_date", 8),
+                ("processing_date", 8),
+                ("correction_date", 8),
+                ("correction_identification", 1),
+                ("serial_id", 30),
+                ("doc_type", 3),  # 2024 update
+              ],
+            },
+            "RESERVED.txt": {
+              "outfile": "reserved.csv",
+              "fields": [
+                ("n_number", 5),
+                ("registrant_name", 50),
+                ("street_address", 33),
+                ("street2", 33),
+                ("city", 18),
+                ("state", 2),
+                ("zip_code", 10),
+                ("reserve_date", 8),
+                ("type_reservation", 2),
+                ("expiration_notice_date", 8),
+                ("n_number_for_change", 5),
+                ("purge_date", 8),
+              ],
+            },
+            "DEREG.txt": {
+              "outfile": "dereg.csv",
+              "fields": [
+                ("n_number", 5),
+                ("serial_number", 30),
+                ("aircraft_mfr_mdl_code", 7),
+                ("eng_mfr_mdl_code", 5),
+                ("year_mfr", 4),
+                ("type_registrant", 1),
+                ("registrant_name", 50),
+                ("street", 33),
+                ("street2", 33),
+                ("city", 18),
+                ("state", 2),
+                ("zip_code", 10),
+                ("region", 1),
+                ("county", 3),
+                ("country", 2),
+                ("status_code", 2),
+                ("type_aircraft", 1),
+                ("type_engine", 2),
+                ("certification", 1),
+                ("last_action_date", 8),
+                ("cert_issue_date", 8),
+                ("air_worth_date", 8),
+                ("cancel_date", 8),
+                ("expiration_date", 8),
+                ("mode_s_code", 8),
+                ("mode_s_code_hex", 10),
+                ("fract_owner", 1),
+                ("unique_id", 8),
+                ("kit_mfr", 30),
+                ("kit_model", 20),
+                ("export_country", 18),
+                ("physical_address", 33),
+                ("physical_address_2", 33),
+                ("physical_city", 18),
+                ("physical_state", 2),
+                ("physical_zip_code", 10),
+                ("physical_county", 3),
+                ("physical_country", 2),
+                ("other_name_1", 50),
+                ("other_name_2", 50),
+                ("other_name_3", 50),
+                ("other_name_4", 50),
+                ("other_name_5", 50),
+                ("reason_code", 2),
+                ("approved_operation_codes", 9),
+              ],
+            },
+          }
+          
+          def parse_fw_line(line, fields):
+            vals = []
+            start = 0
+            for name, width in fields:
+              seg = line[start:start+width]
+              # Strip only trailing spaces; keep leading zeros if any.
+              vals.append(seg.rstrip())
+              start += width
+            return vals
+          
+          def convert(infile, spec):
+            fields = spec["fields"]
+            out = spec["outfile"]
+            with open(infile, "r", encoding="utf-8", errors="ignore") as fin, \
+                 open(out, "w", newline="", encoding="utf-8") as fout:
+              writer = csv.writer(fout)
+              writer.writerow([n for n,_ in fields])
+              for line in fin:
+                # Skip completely blank lines
+                if not line.strip():
+                  continue
+                row = parse_fw_line(line.rstrip("\n"), fields)
+                writer.writerow(row)
+          
+          def main():
+            for src, spec in layouts.items():
+              if not Path(src).exists():
+                print(f"SKIP {src} (not found)")
+                continue
+              print(f"Converting {src} -> {spec['outfile']}")
+              convert(src, spec)
+          
+          if __name__ == "__main__":
+            main()
+          PY
+          
+                    python3 fw_to_csv.py
+                    ls -lh *.csv
 
       - name: Load CSVs into Neon
         env:
